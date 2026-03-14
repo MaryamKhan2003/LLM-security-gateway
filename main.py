@@ -1,47 +1,54 @@
-from pii_detector import detect_pii
+import time
+import ollama
+
 from input_handler import get_user_input
 from injection_detector import detect_prompt_injection
-from policy_engine import apply_policy
-import requests
+from pii_detector import detect_pii
+from policy_engine import policy_decision
 
 
 def query_llm(prompt):
-
-    url = "http://localhost:11434/api/generate"
-
-    data = {
-        "model": "tinyllama",   # or tinyllama
-        "temperature": 0.8,
-        "prompt": prompt,
-        "stream": False
-    }
-
-    response = requests.post(url, json=data)
-    result = response.json()
-
-    return result.get("response", "No response from model")
+    response = ollama.chat(
+        model="tinyllama",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response['message']['content']
 
 
 def main():
 
     text = get_user_input()
 
-    attack = detect_prompt_injection(text)
+    start_time = time.time()
 
-    if attack:
-        print("⚠ Prompt Injection Detected")
-        print("❌ Request blocked by security policy")
+    injection_result = detect_prompt_injection(text)
+
+    pii_result, masked_text = detect_pii(text)
+
+    decision = policy_decision(injection_result, pii_result)
+
+    gateway_time = time.time()
+
+    if decision == "BLOCK":
+        print("Request Blocked")
         return
 
-    sanitized_text = detect_pii(text)
+    if decision == "MASK":
+        text = masked_text
 
-    print("\nInput Sent to LLM:")
-    print(sanitized_text)
+    # LLM call
+    llm_response = query_llm(text)
 
-    response = query_llm(sanitized_text)
+    end_time = time.time()
 
-    print("\nLLM Response:")
-    print(response)
+    gateway_latency = (gateway_time - start_time) * 1000
+    total_latency = (end_time - start_time) * 1000
+
+    print("\n----- Evaluation Output -----")
+    print("Input:", text)
+    print("Gateway Latency:", gateway_latency, "ms")
+    print("Total Latency (Gateway + LLM):", total_latency, "ms")
+    print("LLM Response:", llm_response)
 
 
 if __name__ == "__main__":
